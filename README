@@ -1,0 +1,6 @@
+This is a little collection of Munin plugins I wrote.
+
+Brief Description
+
+* snmp_\_qnap_df - monitor QNAP disk usage through SNMP
+* snmp_\_qnap\_hdd\_temp - monitor QNAP disk temperatures through SNMP

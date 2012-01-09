@@ -1,0 +1,163 @@
+#!/usr/bin/perl
+# -*- perl -*-
+
+=head1 NAME
+
+snmp__qnap_df - Munin plugin to monitor QNAP disk usage through SNMP
+
+=head1 APPLICABLE SYSTEMS
+
+File systems usage stats should be reported by any QNAP storage
+with SNMP Settings enabled.
+
+=head1 CONFIGURATION
+
+The plugin excludes per default the following file systems:
+
+  /sys/kernel/config
+
+To change this set the environment variable "exclude" with a list of
+space separated mount point.  The environment variables "warning" and
+"critical" sets the percentage from which Munin starts to warn about
+the disk usage.
+
+This configuration snipplet is an example with the defaults:
+
+  [snmp_*_qnap_df]
+    env.community public
+    env.warning 92
+    env.critical 98
+    env.exclude /sys/kernel/config
+
+Put it in a file in /etc/munin/plugin-conf.d/ and restart the munin-node.
+
+You may specify filesystem specific warning and critical levels:
+
+    env._share_MD0_DATA_warning 98
+    env._share_MD0_DATA_critical 99
+
+Please see 'perldoc Munin::Plugin::SNMP' for further configuration.
+
+=head1 MAGIC MARKERS
+
+  #%# family=snmpauto
+  #%# capabilities=snmpconf
+
+=head1 VERSION
+
+git-master + a few munin modifications
+
+This plugin was downloaded from L<http://github.com/yoshikaw/munin-plugins/>
+
+=head1 AUTHOR
+
+Copyright (C) 2012 Kazuhiro Yoshikawa <yoshikaw@gmail.com>
+
+QNAP is a trademark of QNAP Systems, Inc.
+
+=head1 BUGS
+
+Does not support SNMPv3.
+
+=head1 LICENSE
+
+GPLv2 or (at your option) any later version.
+
+=cut
+
+use strict;
+use warnings;
+use Munin::Plugin;
+use Munin::Plugin::SNMP;
+use vars qw($DEBUG);
+
+my $DEBUG = $ENV{'MUNIN_DEBUG'} || 0;
+
+my %env = (
+    warning  => $ENV{'warning'} || 92,
+    critical => $ENV{'critical'} || 98,
+    exclude  => $ENV{'exclude'} || '/sys/kernel/config',
+);
+
+my $hrStorageEntry = '1.3.6.1.2.1.25.2.3.1';
+my $hrStorageFixedDisk = '1.3.6.1.2.1.25.2.1.4';
+
+if (defined $ARGV[0] and $ARGV[0] eq 'snmpconf') {
+    print "require $hrStorageEntry\n";
+    exit 0;
+}
+
+# SNMP needed for both config and fetch.
+my $session = Munin::Plugin::SNMP->session();
+
+my $result = $session->get_hash(
+    -baseoid => $hrStorageEntry,
+    -cols    => {
+                    1 => 'index',
+                    2 => 'type',
+                    3 => 'descr',
+                    4 => 'units',
+                    5 => 'size',
+                    6 => 'used',
+                },
+);
+
+if ($DEBUG) {
+    for my $index (sort { $result->{$a}->{index} <=> $result->{$b}->{index} } keys %$result) {
+        for my $key (qw/type descr size used/) {
+            printf "%d: %-5s %s\n", $index, $key, $result->{$index}->{$key};
+        }
+        printf "%d:       is hrStorageFixedDisk? %d\n", $index
+             , $result->{$index}->{type} eq $hrStorageFixedDisk;
+        printf "%d:       match exclude? %d\n", $index
+             , index($env{'exclude'}, $result->{$index}->{descr}) > -1;
+    }
+}
+
+sub print_result
+{
+    my $callback = shift;
+    for my $index (sort { $result->{$a}->{index} <=> $result->{$b}->{index} } keys %$result) {
+        my $type = $result->{$index}->{type};
+        my $desc = $result->{$index}->{descr};
+        next if $type ne $hrStorageFixedDisk;
+        next if index($env{'exclude'}, $desc) > -1;
+        my $name = clean_fieldname($desc);
+        $callback->($name, $result->{$index});
+    }
+}
+
+if (defined $ARGV[0] and $ARGV[0] eq "config") {
+    my ($host, undef, undef, $tail) = Munin::Plugin::SNMP->config_session();
+    # The headers
+    print "host_name $host\n" unless $host eq 'localhost';
+    print "graph_title Filesystem usage (in %)\n";
+    print "graph_args --upper-limit 100 -l 0\n";
+    print "graph_vlabel %\n";
+    print "graph_scale no\n";
+    print "graph_category disk\n";
+
+    print_result(sub{
+        my $name = shift;
+        my $result = shift;
+        printf "%s.label %s\n", $name, $result->{descr};
+        for my $v (qw/warning critical/) {
+            printf "%s.%s %s\n", $name, $v, $ENV{"${name}_${v}"} || $env{$v};
+        }
+        my $size_bytes = int (($result->{size} * $result->{units}) / 1024 / 1024);
+        1 while $size_bytes =~ s/^(\d+)(\d\d\d)/$1,$2/;
+        printf "%s.info size: %s MBytes\n", $name, $size_bytes;
+    });
+
+    exit 0;
+}
+
+print_result(sub {
+    my $name = shift;
+    my $result = shift;
+    my $used = $result->{used};
+    my $size = $result->{size};
+    printf "%s.value %d\n", $name, ($size == 0 ? 0 : ($used / $size) * 100);
+});
+
+exit 0;

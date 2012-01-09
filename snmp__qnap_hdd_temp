@@ -1,0 +1,146 @@
+#!/usr/bin/perl
+# -*- perl -*-
+
+=head1 NAME
+
+snmp__qnap_hdd_temp - Munin plugin to monitor QNAP disk temperatures through SNMP
+
+=head1 APPLICABLE SYSTEMS
+
+Disk temperature should be reported by any QNAP storage with SNMP Settings enabled.
+
+=head1 CONFIGURATION
+
+This configuration snipplet is an example with the defaults:
+
+  [snmp_*_qnap_hdd_temp]
+    env.community public
+    env.scale C
+    env.warning 50
+    env.critical 60
+
+If you wants to use the Fahrenheit scale, set "scale" variable to "F".
+
+Please see 'perldoc Munin::Plugin::SNMP' for further configuration.
+
+=head1 MAGIC MARKERS
+
+  #%# family=snmpauto
+  #%# capabilities=snmpconf
+
+=head1 VERSION
+
+git-master + a few munin modifications
+
+This plugin was downloaded from L<http://github.com/yoshikaw/munin-plugins/>
+
+=head1 AUTHOR
+
+Copyright (C) 2012 Kazuhiro Yoshikawa <yoshikaw@gmail.com>
+
+QNAP is a trademark of QNAP Systems, Inc.
+
+=head1 BUGS
+
+Does not support SNMPv3.
+
+=head1 LICENSE
+
+GPLv2 or (at your option) any later version.
+
+=cut
+
+use strict;
+use warnings;
+use Munin::Plugin;
+use Munin::Plugin::SNMP;
+use vars qw($DEBUG);
+
+$DEBUG = $ENV{'MUNIN_DEBUG'};
+
+my %env = (
+    scale    => $ENV{'scale'} || 'C',
+    warning  => $ENV{'warning'},
+    critical => $ENV{'critical'},
+);
+$env{scale} = 'C' if $env{'scale'} !~ m/^[CF]$/;
+$env{warning} = ($env{scale} eq 'C' ? 50 : 122) if not defined $env{warning};
+$env{critical} = ($env{scale} eq 'C' ? 60 : 140) if not defined $env{critical};
+
+my $HdEntry = '1.3.6.1.4.1.24681.1.2.11.1';
+
+if (defined $ARGV[0] and $ARGV[0] eq 'snmpconf') {
+    print "require $HdEntry\n";
+    exit 0;
+}
+
+# SNMP needed for both config and fetch.
+my $session = Munin::Plugin::SNMP->session();
+
+my $result = $session->get_hash(
+    -baseoid => $HdEntry,
+    -cols    => {
+                    1 => 'index',
+                    2 => 'descr',
+                    3 => 'temperature',
+                    5 => 'model',
+                },
+);
+
+if ($DEBUG) {
+    for my $index (sort { $result->{$a}->{index} <=> $result->{$b}->{index} } keys %$result) {
+        for my $key (qw/descr temperature model/) {
+            printf "%d: %-11s %s\n", $index, $key, $result->{$index}->{$key};
+        }
+    }
+}
+
+sub print_result
+{
+    my $callback = shift;
+    for my $index (sort { $result->{$a}->{index} <=> $result->{$b}->{index} } keys %$result) {
+        my $desc = $result->{$index}->{descr};
+        $callback->($desc, $result->{$index});
+    }
+}
+
+if (defined $ARGV[0] and $ARGV[0] eq "config") {
+    my ($host, undef, undef, $tail) = Munin::Plugin::SNMP->config_session();
+    my $scale = $env{'scale'} eq 'C' ? 'Celsius' : 'Fahranheit';
+    # The headers
+    print "host_name $host\n" unless $host eq 'localhost';
+    print "graph_title HDD temperature (in degrees $scale)\n";
+    print "graph_args --base 1000 -l 0\n";
+    print "graph_vlabel temp in ｰ$env{'scale'}\n";
+    print "graph_category sensors\n";
+    print "graph_info This graph shows the temperature in degrees $scale of the hard drives in the machine.\n";
+
+    print_result(sub {
+        my $desc = shift;
+        my $result = shift;
+        my $model = $result->{model};
+        chomp $model;
+        printf "%s.label %s\n", $desc, "$desc:$model";
+        printf "%s.info %s\n", $desc, "degrees $scale";
+        printf "%s.warning %d\n", $desc, $env{warning};
+        printf "%s.critical %d\n", $desc, $env{critical};
+    });
+
+    exit 0;
+}
+
+print_result(sub {
+    my $desc = shift;
+    my $result = shift;
+    if ($result->{temperature} =~ m!(\d+) (C)/(\d+) (F)!o) {
+        my %temp = ( $2 => $1, $4 => $3 );
+        printf "%s.value %s\n", $desc, $temp{$env{'scale'}};
+    }
+    else {
+        printf "%s.value %s\n", $desc, 'U';
+    }
+});
+
+exit 0;
+
+__END__
