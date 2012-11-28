@@ -144,7 +144,7 @@ if (defined $ARGV[0] and $ARGV[0] eq "config") {
         for my $v (qw/warning critical/) {
             printf "%s.%s %s\n", $name, $v, $ENV{"${name}_${v}"} || $env{$v};
         }
-        my $size_bytes = $result->{size} * $result->{units};
+        my $size_bytes = correct_overflow($result->{size}) * $result->{units};
         my $divide_times = 0;
         while (($size_bytes / 1024) > 1024) {
             $divide_times++;
@@ -171,9 +171,16 @@ if (defined $ARGV[0] and $ARGV[0] eq "config") {
 print_result(sub {
     my $name = shift;
     my $result = shift;
-    my $used = $result->{used};
-    my $size = $result->{size};
+    my $used = correct_overflow($result->{used});
+    my $size = correct_overflow($result->{size});
     printf "%s.value %d\n", $name, ($size == 0 ? 0 : ($used / $size) * 100);
 });
 
+sub correct_overflow{
+    if($_[0]<0){
+        return $_[0]+2**32;
+    }else{
+        return $_[0];
+    }
+}
 exit 0;
